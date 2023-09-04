@@ -10,9 +10,9 @@ export default class AppController {
     res.send({ redis, db });
   }
 
-  static getStats(req, res) {
-    const users = dbClient.nbUsers();
-    const files = dbClient.nbFiles();
+  static async getStats(req, res) {
+    const users = await dbClient.nbUsers();
+    const files = await dbClient.nbFiles();
 
     res.statusCode = 200;
 
