@@ -4,6 +4,7 @@ import { promises as fsPromise } from 'fs';
 import { ObjectId } from 'mongodb';
 import redisClient from '../utils/redis';
 import dbClient from '../utils/db';
+import { tryCatch } from 'bull/lib/utils';
 
 export default class FilesController {
   static async postUpload(req, res) {
@@ -25,7 +26,7 @@ export default class FilesController {
     const fileTypes = ['folder', 'file', 'image'];
 
     const {
-      name, type, parentId = null, isPublic = false, data = '',
+      name, type, parentId = 0, isPublic = false, data = '',
     } = req.body;
 
     if (!name) {
@@ -45,8 +46,14 @@ export default class FilesController {
 
     const filesColl = dbClient.db.collection('files');
 
-    if (parentId !== null) {
-      const file = await filesColl.findOne({ _id: ObjectId(parentId) });
+    if (parentId !== 0) {
+      let file = null;
+      try {
+        file = await filesColl.findOne({ _id: ObjectId(parentId) });
+      } catch (error) {
+        res.statusCode = 400;
+        return res.send({ error: "could not retreive parent"})
+      }
       if (!file) {
         res.statusCode = 400;
         return res.send({ error: 'Parent not found' });
@@ -57,7 +64,8 @@ export default class FilesController {
       }
       if (file.type === 'folder') {
         const folderPath = file.localpath;
-        const filePath = `${folderPath}/${name}`;
+        const filename = uuidv4()
+        const filePath = `${folderPath}/${filename}`;
         const dataDecoded = Buffer.from(data, 'base64');
         await fsPromise.mkdir(folderPath, { recursive: true });
         if (type !== 'folder') {
@@ -119,5 +127,100 @@ export default class FilesController {
       });
     }
     return res.send();
+  }
+
+  static async getShow(req, res){
+    const xToken = req.header('X-Token');
+
+    const userId = await redisClient.get(`auth_${xToken}`);
+    if (!userId) {
+      res.statusCode = 401;
+      return res.send({ error: 'Unauthorized' });
+    }
+    const usersCol = dbClient.db.collection('users');
+    const user = await usersCol.findOne({ _id: ObjectId(userId) });
+
+    if (!user) {
+      res.statusCode = 401;
+      return res.send({ error: 'Unauthorized' });
+    }
+
+    const { id } = req.params;
+
+    try {
+      const fileColl = await dbClient.db.collection('files');
+      const file =  await fileColl.findOne({ _id: ObjectId(id)})
+      if(!file){
+        res.statusCode = 400;
+        return res.send({ error: "Cannot find file"})
+      }
+      return res.send({
+        id: file.insertedId,
+        userId: file.userId,
+        name: file.name,
+        type: file.type,
+        isPublic: file.isPublic,
+        parentId: file.parentId,
+      })
+    } catch (error) {
+      res.statusCode = 400;
+      res.send({ error: "Could not retreive file"})
+    }
+  }
+
+  static async getIndex(req, res){
+    const xToken = req.header('X-Token');
+
+    const userId = await redisClient.get(`auth_${xToken}`);
+    if (!userId) {
+      res.statusCode = 401;
+      return res.send({ error: 'Unauthorized' });
+    }
+    const usersCol = dbClient.db.collection('users');
+    const user = await usersCol.findOne({ _id: ObjectId(userId) });
+
+    if (!user) {
+      res.statusCode = 401;
+      return res.send({ error: 'Unauthorized' });
+    }
+
+    let { parentId } = req.query;
+    const page = parseInt(req.query.page) || 0
+
+    let pageSize = 20
+    let skip = page * pageSize
+
+
+    if (parentId == '0' || !parentId){
+      const pipeline = [
+        { $match: { parentId: 0 }},
+        { $skip: skip},
+        { $limit: pageSize}
+      ]
+
+      const fileColl = await dbClient.db.collection('files');
+      const files = await fileColl.aggregate(pipeline).toArray();
+      if(!files){
+        return res.send([])
+      }
+      return res.send(files)
+    }
+
+    try {
+      const pipeline = [
+        { $match: { parentId: parentId}},
+        { $skip: skip},
+        { $limit: pageSize}
+      ]
+      const fileColl = await dbClient.db.collection('files');
+      const files =  await fileColl.aggregate(pipeline).toArray()
+      if(!files){
+        return res.send([])
+      }
+      return res.send(files)
+    } catch (error) {
+      res.statusCode = 400;
+      res.send({ error: "Could not retreive file"})
+    }
   }
 }

@@ -9,6 +9,9 @@ const DB_DATABASE = env.DB_DATABASE || 'files_manager';
 const url = `mongodb://${DB_HOST}:${DB_PORT}`;
 
 class DBStorage {
+  client = null;
+  db = false;
+
   constructor() {
     this.client = new MongoClient(url, { useNewUrlParser: true, useUnifiedTopology: true });
     this.client.connect((err) => {
